@@ -10,6 +10,7 @@ from .config_models import (
     WcConfig,
     WCInferConfig,
     WCMakeDatasetConfig,
+    WCTrainPtConfig,
     WCTrainSftConfig,
 )
 from .log import logger
@@ -47,6 +48,17 @@ def load_base_config() -> WcConfig:
     return wc_config
 
 
+def _flatten_quantization_args(train_sft_args) -> dict:
+    """Extract quantization sub-config and return as a flat dict with non-None values.
+
+    LLaMA-Factory expects quantization params at the top level of the argument
+    namespace (e.g. ``--quantization_bit 4``), not nested under a ``quantization``
+    prefix. This helper flattens the nested ``QuantizationArgs`` model so it can
+    be merged directly into the config dict passed to HfArgumentParser.
+    """
+    return train_sft_args.quantization.get_non_none_dict()
+
+
 def create_config_by_arg_type(arg_type: str, wc_config: WcConfig) -> BaseModel:
     """Create corresponding configuration object based on argument type, merge common_config"""
     if arg_type == "cli_args":
@@ -55,7 +67,13 @@ def create_config_by_arg_type(arg_type: str, wc_config: WcConfig) -> BaseModel:
     common_config = wc_config.common_args.model_dump()
 
     if arg_type == "web_demo" or arg_type == "api_service":
-        config_dict = {**common_config, **wc_config.infer_args.model_dump()}
+        # Inherit quantization settings from train_sft_args for inference
+        quant_dict = _flatten_quantization_args(wc_config.train_sft_args)
+        config_dict = {
+            **common_config,
+            **wc_config.infer_args.model_dump(),
+            **quant_dict,
+        }
         return WCInferConfig(**config_dict)
 
     elif arg_type == "vllm":
@@ -66,12 +84,30 @@ def create_config_by_arg_type(arg_type: str, wc_config: WcConfig) -> BaseModel:
 
     elif arg_type == "train_sft":
         common_config["include_type"] = wc_config.make_dataset_args.include_type
-        config_dict = {**common_config, **wc_config.train_sft_args.model_dump()}
+
+        # Merge training params; flatten the nested quantization sub-config
+        train_dict = wc_config.train_sft_args.model_dump()
+        # Remove the nested "quantization" dict — its fields are flattened below
+        train_dict.pop("quantization", None)
+        train_dict.update(_flatten_quantization_args(wc_config.train_sft_args))
+
+        config_dict = {**common_config, **train_dict}
         return WCTrainSftConfig(**config_dict)
+
+    elif arg_type == "train_pt":
+        if wc_config.train_pt_args is None:
+            logger.error("Missing `train_pt_args` in configuration file.")
+            sys.exit(1)
+
+        train_dict = wc_config.train_pt_args.model_dump()
+        train_dict.pop("quantization", None)
+        train_dict.update(_flatten_quantization_args(wc_config.train_pt_args))
+
+        config_dict = {**common_config, **train_dict}
+        return WCTrainPtConfig(**config_dict)
 
     elif arg_type == "make_dataset":
         make_dataset_config = wc_config.make_dataset_args.model_dump()
-        # TODO: Should the following three parameters be moved to common?
         train_sft_args = wc_config.train_sft_args
         extra_values = {
             "dataset": train_sft_args.dataset,
