@@ -265,6 +265,7 @@ class VllmArgs(BaseConfigModel):
             "compute capability < 8.0 (e.g. Tesla T4, V100) that do not support bfloat16. "
             "Allowed values: 'auto', 'float16', 'bfloat16', 'float32', 'half', 'bf16'."
         ),
+    )
     quantization: Optional[str] = Field(
         default=None, description="Quantization method for vLLM, e.g. 'awq', 'gptq'"
     )
